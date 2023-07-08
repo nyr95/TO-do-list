@@ -1,113 +1,140 @@
-import React, { useState, useEffect } from "react";
-import { StyleSheet, Text, View, TextInput, Button } from "react-native";
-import { configureStore, combineReducers } from "redux";
-import { Provider } from "react-redux";
+//jshint esversion:6
 
-const todosReducer = (state = [], action) => {
-  switch (action.type) {
-    case "ADD_TODO":
-      return [...state, action.payload];
-    case "MARK_TODO_AS_COMPLETED":
-      return state.map((todo) => (
-        todo.id === action.payload.id ? { ...todo, completed: true } : todo
-      ));
-    case "DELETE_TODO":
-      return state.filter((todo) => todo.id !== action.payload.id);
-    default:
-      return state;
-  }
+const express = require("express");
+const bodyParser = require("body-parser");
+const mongoose = require("mongoose");
+const _ = require("lodash");
+
+const app = express();
+
+app.set('view engine', 'ejs');
+
+app.use(bodyParser.urlencoded({extended: true}));
+app.use(express.static("public"));
+
+mongoose.connect("mongodb://localhost:27017/todolistDB", {useNewUrlParser: true});
+
+const itemsSchema = {
+  name: String
 };
 
-const App = () => {
-  const [todos, setTodos] = useState([]);
-  const store = configureStore(combineReducers({ todos }));
+const Item = mongoose.model("Item", itemsSchema);
 
-  useEffect(() => {
-    setTodos(store.getState().todos);
-  }, [store]);
 
-  const addTodo = () => {
-    const newTodo = {
-      text: "",
-      completed: false,
-    };
-
-    store.dispatch({ type: "ADD_TODO", payload: newTodo });
-  };
-
-  const handleComplete = (id) => {
-    store.dispatch({ type: "MARK_TODO_AS_COMPLETED", payload: { id } });
-  };
-
-  const handleDelete = (id) => {
-    store.dispatch({ type: "DELETE_TODO", payload: { id } });
-  };
-
-  return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>To Do List</Text>
-      </View>
-      <View style={styles.list}>
-        {todos.map((todo) => (
-          <View key={todo.id} style={styles.item}>
-            <Text style={styles.text}>{todo.text}</Text>
-            <Button
-              onPress={() => handleComplete(todo.id)}
-              title={todo.completed ? "Uncomplete" : "Complete"}
-            />
-            <Button
-              onPress={() => handleDelete(todo.id)}
-              title="Delete"
-            />
-          </View>
-        ))}
-      </View>
-      <View style={styles.input}>
-        <TextInput
-          placeholder="Add a new todo..."
-          onChange={handleChange}
-        />
-        <Button onPress={addTodo} title="Add" />
-      </View>
-    </View>
-  );
-};
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#fff",
-  },
-  header: {
-    height: 50,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: "bold",
-  },
-  list: {
-    flex: 1,
-    marginTop: 10,
-    padding: 10,
-  },
-  item: {
-    height: 50,
-    borderBottomColor: "#ccc",
-    borderBottomWidth: 1,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  text: {
-    fontSize: 16,
-  },
-  input: {
-    height: 50,
-    flexDirection: "row",
-    alignItems: "center",
-  },
+const item1 = new Item({
+  name: "Welcome to your todolist!"
 });
 
-export default App;
+const item2 = new Item({
+  name: "Hit the + button to add a new item."
+});
+
+const item3 = new Item({
+  name: "<-- Hit this to delete an item."
+});
+
+const defaultItems = [item1, item2, item3];
+
+const listSchema = {
+  name: String,
+  items: [itemsSchema]
+};
+
+const List = mongoose.model("List", listSchema);
+
+
+app.get("/", function(req, res) {
+
+  Item.find({}, function(err, foundItems){
+
+    if (foundItems.length === 0) {
+      Item.insertMany(defaultItems, function(err){
+        if (err) {
+          console.log(err);
+        } else {
+          console.log("Successfully savevd default items to DB.");
+        }
+      });
+      res.redirect("/");
+    } else {
+      res.render("list", {listTitle: "Today", newListItems: foundItems});
+    }
+  });
+
+});
+
+app.get("/:customListName", function(req, res){
+  const customListName = _.capitalize(req.params.customListName);
+
+  List.findOne({name: customListName}, function(err, foundList){
+    if (!err){
+      if (!foundList){
+        //Create a new list
+        const list = new List({
+          name: customListName,
+          items: defaultItems
+        });
+        list.save();
+        res.redirect("/" + customListName);
+      } else {
+        //Show an existing list
+
+        res.render("list", {listTitle: foundList.name, newListItems: foundList.items});
+      }
+    }
+  });
+
+
+
+});
+
+app.post("/", function(req, res){
+
+  const itemName = req.body.newItem;
+  const listName = req.body.list;
+
+  const item = new Item({
+    name: itemName
+  });
+
+  if (listName === "Today"){
+    item.save();
+    res.redirect("/");
+  } else {
+    List.findOne({name: listName}, function(err, foundList){
+      foundList.items.push(item);
+      foundList.save();
+      res.redirect("/" + listName);
+    });
+  }
+});
+
+app.post("/delete", function(req, res){
+  const checkedItemId = req.body.checkbox;
+  const listName = req.body.listName;
+
+  if (listName === "Today") {
+    Item.findByIdAndRemove(checkedItemId, function(err){
+      if (!err) {
+        console.log("Successfully deleted checked item.");
+        res.redirect("/");
+      }
+    });
+  } else {
+    List.findOneAndUpdate({name: listName}, {$pull: {items: {_id: checkedItemId}}}, function(err, foundList){
+      if (!err){
+        res.redirect("/" + listName);
+      }
+    });
+  }
+
+
+});
+
+app.get("/about", function(req, res){
+  res.render("about");
+});
+
+app.listen(3000, function() {
+  console.log("Server started on port 3000");
+});
